@@ -8,7 +8,7 @@ RUN set -ex \
     iproute2 \
     iptables iptables-legacy \
     iputils \
-    ipv6calc \
+    ipcalc \
     ndisc6 \
     tcpdump \
     conntrack-tools

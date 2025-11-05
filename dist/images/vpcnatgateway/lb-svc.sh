@@ -12,6 +12,15 @@ function exec_cmd() {
     fi
 }
 
+function ip_for() {
+    addr="$1"
+    if is_ipv6 "$addr"; then
+        echo "ip -6"
+    else
+        echo "ip"
+    fi
+}
+
 # helper: detect if an address/string looks like IPv6
 function is_ipv6() {
     addr="$1"
@@ -62,23 +71,17 @@ function add_eip() {
         eip=${arr[0]}
         eip_without_prefix=(${eip//\// })
         gateway=${arr[1]}
+        eip_network=$(ipcalc -n $eip | awk -F '=' '{print $2}')
+        eip_prefix=$(ipcalc -p $eip | awk -F '=' '{print $2}')
+        ip_cmd=$(ip_for "$eip")
 
+        exec_cmd "$ip_cmd addr replace $eip dev net1"
+        exec_cmd "$ip_cmd route replace $eip_network/$eip_prefix dev net1 table $ROUTE_TABLE"
+        exec_cmd "$ip_cmd route replace default via $gateway dev net1 table $ROUTE_TABLE"
+        
         if is_ipv6 "$eip"; then
-            eip_network=$(ipv6calc -n $eip 2>/dev/null | awk -F '=' '{print $2}')
-            eip_prefix=$(ipv6calc -p $eip 2>/dev/null | awk -F '=' '{print $2}')
-
-            exec_cmd "ip -6 addr replace $eip dev net1"
-            exec_cmd "ip -6 route replace $eip_network/$eip_prefix dev net1 table $ROUTE_TABLE"
-            exec_cmd "ip -6 route replace default via $gateway dev net1 table $ROUTE_TABLE"
             exec_cmd "ndisc6 -q -r -s $eip_without_prefix $gateway"
         else
-            # IPv4 path (unchanged behavior)
-            eip_network=$(ipcalc -n $eip | awk -F '=' '{print $2}')
-            eip_prefix=$(ipcalc -p $eip | awk -F '=' '{print $2}')
-
-            exec_cmd "ip addr replace $eip dev net1"
-            exec_cmd "ip route replace $eip_network/$eip_prefix dev net1 table $ROUTE_TABLE"
-            exec_cmd "ip route replace default via $gateway dev net1 table $ROUTE_TABLE"
             ip link set dev net1 arp on
             exec_cmd "arping -f -c 3 -s $eip_without_prefix $gateway"
         fi
@@ -95,7 +98,7 @@ function add_dnat() {
         internalIp=${arr[3]}
         internalPort=${arr[4]}
         defaultGateway=${arr[5]}
-        # Select ip/iptables variant based on eip or internalIp
+        ip_cmd=$(ip_for "$eip")
         iptables_cmd=$(iptables_for "$eip")
         iptables_save_cmd="${iptables_cmd}-save"
 
@@ -106,12 +109,7 @@ function add_dnat() {
 
         exec_cmd "$iptables_cmd -t nat -A PREROUTING -p $protocol -d $eip --dport $dport -j DNAT --to-destination $internalIp:$internalPort"
 
-        # add route for internal IP in appropriate ip family
-        if is_ipv6 "$internalIp"; then
-            exec_cmd "ip -6 route replace $internalIp via $defaultGateway table $ROUTE_TABLE"
-        else
-            exec_cmd "ip route replace $internalIp via $defaultGateway table $ROUTE_TABLE"
-        fi
+        exec_cmd "$ip_cmd route replace $internalIp via $defaultGateway table $ROUTE_TABLE"
 
         if $iptables_save_cmd 2>/dev/null | grep "POSTROUTING" | grep "\-d $internalIp" | grep "MASQUERADE" >/dev/null 2>&1; then
             continue
